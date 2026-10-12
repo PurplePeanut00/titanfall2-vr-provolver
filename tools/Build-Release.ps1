@@ -1,0 +1,24 @@
+[CmdletBinding()]
+param()
+$ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid VERSION.' }
+$dist = Join-Path $projectRoot 'dist'
+$name = 'Titanfall2VR-ProVolver-v' + $version + '-Windows'
+$stage = Join-Path $dist $name
+if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+New-Item -ItemType Directory -Path (Join-Path $stage 'tools') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stage 'docs') -Force | Out-Null
+# Explicit allowlist: no vendor DLLs, personal settings, logs or uploaded game files.
+$files = @('Bridge.cs', 'BUILD.cmd', 'START.cmd', 'TEST.cmd', 'GET_PROTUBE_DLL.cmd',
+    'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md', 'VERSION')
+foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $projectRoot $file) -Destination $stage }
+Copy-Item -LiteralPath (Join-Path $projectRoot 'tools/Get-ProTubeDll.ps1') -Destination (Join-Path $stage 'tools')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'tools/Build-Release.ps1') -Destination (Join-Path $stage 'tools')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/VALIDATION.md') -Destination (Join-Path $stage 'docs')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'game-mod') -Destination $stage -Recurse
+$zip = Join-Path $dist ($name + '.zip')
+Compress-Archive -LiteralPath $stage -DestinationPath $zip -Force
+Write-Host ('Created ' + $zip)
+Write-Host 'Source-based Windows release: START.cmd builds the EXE locally. Vendor DLL downloads separately.'

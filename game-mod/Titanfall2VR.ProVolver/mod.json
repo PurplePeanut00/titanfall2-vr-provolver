@@ -1,0 +1,14 @@
+{
+  "Name": "Titanfall2VR.ProVolver",
+  "Description": "Standalone campaign shot events for the ProVolver bridge. No bHaptics dependency.",
+  "Version": "0.3.0",
+  "LoadPriority": 4,
+  "RequiredOnClient": false,
+  "Scripts": [
+    {
+      "Path": "pvbridge_client.nut",
+      "RunOn": "CLIENT && SP",
+      "ClientCallback": { "After": "PVBridge_Init" }
+    }
+  ]
+}
