@@ -1,15 +1,13 @@
 # Titanfall 2 VR ProVolver — standalone provider
 
 ProVolver recoil for **CircuitLord's Titanfall 2 VR campaign mod**, with adaptive
-rapid-fire strength. **No bHaptics plugin, bHaptics Player or bHaptics hardware is
-required by this version.**
+rapid-fire strength.
 
-Version **0.3.0 is an experimental first-test build**. A small included Northstar
-client script observes the player's weapons and writes its own shot events.
-The separate Windows bridge reads those events and drives the ProVolver.
-The recoil scheduler and ProTube driver are unchanged from the successful v0.2
-test, but this new game script has **not yet been compiled or tested in-game**.
-This is an unofficial community add-on, not native support in CircuitLord's mod.
+Version **0.3.3** tracks holstered weapon ammo for immediate first shots after
+switching and requests **255/255 kick power for every emitted shotgun event**.
+Charge Rifle and Titan Plasma Railgun charge-up rumble is retained.
+**The standalone provider, charging effect and Windows installer still need an
+in-game/Windows PC test.** This remains an experimental community add-on.
 
 ## Requirements
 
@@ -20,51 +18,116 @@ This is an unofficial community add-on, not native support in CircuitLord's mod.
 - One ProVolver paired to Windows Bluetooth, plus the official ProTube DLL.
 
 The earlier bridge was tested with Steam/EA, CircuitLord VR 1.0.17, Northstar
-1.31.13 and one ProVolver Elite. Version 0.3.0 targets that setup but awaits an
+1.31.13 and one ProVolver Elite. The standalone provider targets that setup but awaits an
 in-game test. Other stores, multiplayer and multiple ProTube devices are untested.
 
-## Installation and first test
+## Easy installation
 
-1. Close Titanfall 2 and any older ProVolver bridge window.
-2. Extract the Windows release ZIP into a writable folder outside the game.
-3. Copy **`game-mod\Titanfall2VR.ProVolver`** into **`Titanfall2\TF2VR\mods`**.
-   The result must be `TF2VR\mods\Titanfall2VR.ProVolver\mod.json`.
-   Copy the entire folder, not just `mod.json`. Do not replace your entire mods folder.
-4. Run **GET_PROTUBE_DLL.cmd** once. This fetches the pinned official SDK and
-   verifies its SHA-256 checksum. Alternatively copy the tested
-   `ForceTubeVR_API_x64.dll` from your older working bridge next to `START.cmd`.
-5. Turn on your paired ProVolver and close ProTube Companion.
-6. Launch the game normally in VR and load a campaign save.
-7. Run **START.cmd**. It compiles the bridge locally; no Visual Studio or Python
-   is required. Choose **3 — Monitor shots only** first. If prompted, paste the
-   full path to your game's `TF2VR\logs` folder.
-8. Wait for **Standalone game provider detected** (normally within five seconds
-   of active gameplay). Fire several separated shots. The `Shots` count should
-   increase; reloading or switching weapons by itself should not add shots.
-9. Stop the monitor with Ctrl+C, restart START.cmd if the terminal closes, then
-   choose **2 — Start live recoil bridge**. Test single shots, bursts and rapid fire.
+1. Download the **v0.3.3 Easy Setup ZIP** and choose **Extract All**.
+   GitHub's **Code -> Download ZIP** also works once the 0.3.3 source is uploaded.
+2. Close Titanfall 2 and any old ProVolver bridge. Double-click **INSTALL.cmd**.
+3. Setup looks for the game in your Steam libraries. Press **Enter** to confirm
+   the folder, or **B** to select another. If it cannot find the game, a folder
+   picker opens: select the folder containing `Titanfall2.exe` and `TF2VR`.
+4. Wait for **Installed**. Setup installs the mod, builds/tests the bridge,
+   downloads and checks the official ProTube DLL, saves the log path, and creates
+   a desktop shortcut named **Titanfall 2 VR - ProVolver**.
 
-Option **1** requests one full-power test kick after the connection vibration
-and your Enter keypress. Q then Enter cancels it. Option 3 never loads the SDK.
-The bridge saves your log folder in `logs-path.txt`; delete/edit it to change it.
+Setup uses Windows PowerShell and the included .NET Framework compiler.
+No Python or Visual Studio is needed. Internet access is needed on first setup
+unless the exact tested DLL is placed beside INSTALL.cmd. Setup does not fire
+any test kicks or connect to the ProVolver. It normally runs without elevation;
+if the game folder is not writable, setup reports the access error.
 
-You may keep bHaptics installed for your vest: this bridge **ignores its events**.
-To verify independence, close bHaptics Player for this test. If desired, with the
-game closed, temporarily move `Titanfall2VR_bhaptics` out of `TF2VR\mods` and its
-bHaptics DLL out of `TF2VR\plugins` into a backup folder. Do not move unrelated
-plugins. Removing bHaptics is optional, not part of normal setup.
+## Each time you play
 
-If the new script prevents the game loading, close the game and move only
-`Titanfall2VR.ProVolver` out of `TF2VR\mods`. Your earlier bridge remains usable
-with its original bHaptics setup.
+1. Turn on your paired ProVolver and close ProTube Companion.
+2. Open **Titanfall 2 VR - ProVolver** on your desktop.
+3. Launch the game through your usual VR launcher and load your campaign.
+
+Leave the bridge window open. The shortcut starts recoil immediately, with no
+test menu or log-path entry. It can wait while you launch the game. Close the
+window or press Ctrl+C when you finish. It does not launch Steam/EA or select a
+VR launch method for you. Your bHaptics vest setup may stay running independently.
+
+## First test and troubleshooting tools
+
+The provider has not yet been verified in-game. On the first run, look for
+**Standalone game provider detected**, then check several single shots and a
+short automatic burst. If it does not work, use the diagnostic menu:
+
+Press **Win+R**, enter `%LOCALAPPDATA%\Titanfall2VR-ProVolver`, and open **START.cmd**.
+Option 3 monitors shots without connecting to the device. Option 1 requests a
+single full-power kick after you press Enter. Option 2 runs live recoil. **Option 5** runs a two-second rising rumble test
+after you press Enter, without sending a recoil kick.
+
+To verify independence, you can close bHaptics Player. You do not need to delete
+your bHaptics mod; this bridge ignores its messages.
+
+## Updates and uninstall
+
+For an update, close the game/bridge and run the new package's INSTALL.cmd.
+The installer keeps the previous app under
+`%LOCALAPPDATA%\Titanfall2VR-ProVolver-backups` and previous ProVolver mod under
+`TF2VR\ProVolver-backups`, outside the active mods folder. If replacing the
+files fails, it attempts to restore both previous components automatically.
+Other game mods are not replaced.
+
+To uninstall, open `%LOCALAPPDATA%\Titanfall2VR-ProVolver` using Win+R and run
+**UNINSTALL.cmd** with the game/bridge closed. Type REMOVE when prompted. It
+moves installed files/diagnostics into backups, removes its desktop shortcut,
+and restores any ProVolver mod that existed before the first installer run.
+If the installed mod has been edited, it stops so you can preserve those edits.
+If a game script error prevents loading, move `Titanfall2VR.ProVolver` out of
+`TF2VR\mods` to disable it immediately.
+
+## Portable/manual setup (optional)
+
+The original manual route still works: copy `game-mod\Titanfall2VR.ProVolver`
+into `TF2VR\mods`, run GET_PROTUBE_DLL.cmd, and run START.cmd. Use INSTALL.cmd
+for the simpler workflow. The PLAY.cmd in the download is intended for the
+installed copy and needs an already-built bridge.
+
+## Charge-up rumble
+
+The included provider reads the active weapon's charge fraction. The first
+supported weapons are the **Charge Rifle** (`mp_weapon_defender`, while attack
+is held) and **Titan Plasma Railgun** (`mp_titanweapon_sniper`, while aiming).
+Those game flags still need validation with CircuitLord's VR controls.
+
+Rumble rises from a low level toward **255/255 at full charge**, and remains at
+that level while a full charge is held. The game sends an explicit stop when
+charging ends, the player fires, switches weapons or dies. A local timeout stops
+refreshing if updates stop (for example during a pause, load or interruption).
+
+Every rumble request is a finite 100 ms pulse, refreshed at most 20 times/second.
+The bridge expires charge state after 180 ms without a fresh received sample;
+no infinite-duration command is used. These are software timing limits, not
+measured Bluetooth response guarantees. Log buffering may cause stepping or
+brief interruptions, so test it with the actual headset and controller setup.
+
+Firing uses the existing ammo-based recoil detection. A charge ending **never
+creates a synthetic shot**: releasing/cancelling should not create an extra kick.
+A held-trigger Charge Rifle or Plasma Railgun discharge can also be detected
+when charge resets and the attack cooldown advances, even without a clip decrease.
+Charge cancellation by itself never produces a kick. Continuous-beam and L-STAR
+heat feedback are not added.
+
+**Run the new INSTALL.cmd even if an earlier version is installed.** Both the
+bridge and game provider must be updated for the charge effect. The old 0.3.0
+provider can still supply shots, but cannot supply charge state.
 
 ## Recoil behaviour
 
 - The active pilot weapon drives your single ProVolver regardless of holding hand.
   There is no left/right device routing. Titan primary recoil and a first pulse
   for recognized Titan rocket salvos are also attempted.
-- A decrease in magazine ammo emits one event per observed frame. Reloads, weapon
-  switches, player changes and long simulation gaps establish a new baseline.
+- Ammo is tracked for all main weapons, including holstered weapons. A decrease
+  on the active weapon emits one event per observed frame, including a switch
+  and shot in the same frame. Player changes and long gaps reset the baseline.
+- Actual shotguns request 255/255 kick power and retain 130 ms recovery, including
+  batched events. Other weapons retain adaptive power. Cadence resets on weapon
+  changes and pauses longer than 300 ms.
 - Heavy groups begin with a 130 ms recovery budget; other groups begin at 60 ms.
   After two usable shot intervals, the fastest of up to six samples selects a
   50–130 ms budget with an 8 ms margin. ProTube's `TempoToKickPower` selects power.
@@ -72,9 +135,8 @@ with its original bHaptics setup.
   A single early event can wait up to 40 ms. New events replace waiting ones.
 - The bridge uses the same Pistol1/channel 4 assignment as v0.2.
 
-The provider includes a weapon name for diagnostics. The preserved scheduler
-still tunes broad recoil groups, so switching within a group can take a few
-shots to retune. Its internal `_r` labels are legacy group names, not handedness.
+The provider includes a weapon name for diagnostics. The scheduler
+still tunes broad recoil groups, and resets cadence when the weapon name changes. Its internal `_r` labels are legacy group names, not handedness.
 
 ## Limits
 
@@ -109,9 +171,11 @@ For a parser problem, include just a few `[PVBRIDGE/1]` game-log lines.
 ## Build, test and release
 
 `BUILD.cmd` compiles the C# bridge. `TEST.cmd` runs its hardware-free tests.
-GitHub Actions runs these on Windows and assembles a source-based release ZIP;
+The included GitHub Actions workflow, when uploaded under `.github`, runs these
+on Windows and assembles a source-based release ZIP;
 it does not launch Titanfall 2, test hardware or automatically publish anything.
-`tools\Build-Release.ps1` creates the same ZIP locally. The included game script
+`tools\Build-Release.ps1` creates the Easy Setup ZIP locally.
+`tools\Test-Setup.ps1` runs installation/rollback fixture tests without hardware. The included game script
 is compiled by Titanfall/Northstar at load time, not by BUILD.cmd or TEST.cmd.
 See [validation notes](docs/VALIDATION.md).
 

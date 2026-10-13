@@ -1,7 +1,7 @@
 {
   "Name": "Titanfall2VR.ProVolver",
-  "Description": "Standalone campaign shot events for the ProVolver bridge. No bHaptics dependency.",
-  "Version": "0.3.0",
+  "Description": "Standalone campaign shot and charge events for the ProVolver bridge.",
+  "Version": "0.3.3",
   "LoadPriority": 4,
   "RequiredOnClient": false,
   "Scripts": [

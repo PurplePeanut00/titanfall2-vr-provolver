@@ -1,0 +1,26 @@
+# Vendor SDKs and local builds
+*.dll
+*.exe
+*.pdb
+*.download
+bin/
+obj/
+dist/
+
+# Local settings and diagnostics
+logs-path.txt
+bridge-session*.txt
+nslog*.txt
+*.log
+crashes/
+*.dmp
+
+# Local packaging and editor files
+*.zip
+.vs/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Installer local state
+install.json

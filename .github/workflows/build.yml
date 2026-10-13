@@ -1,0 +1,30 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run tests without hardware
+        shell: cmd
+        run: TEST.cmd
+      - name: Test setup file operations without hardware
+        shell: powershell
+        run: ./tools/Test-Setup.ps1
+      - name: Assemble Windows setup release
+        shell: powershell
+        run: ./tools/Build-Release.ps1
+      - name: Upload release ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titanfall2VR-ProVolver-Windows
+          path: dist/*.zip
+          if-no-files-found: error

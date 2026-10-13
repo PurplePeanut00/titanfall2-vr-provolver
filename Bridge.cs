@@ -1,4 +1,4 @@
-// Titanfall 2 VR / ProVolver Bridge, 0.3.0. See LICENSE.
+// Titanfall 2 VR / ProVolver Bridge, 0.3.3. See LICENSE.
 // C# 5 / .NET Framework 4.x; runs outside the game. Uses the bundled standalone campaign script provider.
 using System;
 using System.IO;
@@ -17,6 +17,7 @@ namespace TF2Provolver
         public DateTime Time;
         public string Name;
         public string Weapon;
+        public int Charge = -1;
     }
 
     public static class Events
@@ -26,8 +27,20 @@ namespace TF2Provolver
         static readonly Regex Pattern = new Regex(Header +
             @"shot=(pistol|rifle|shotgun|titan|titan_rockets) weapon=([a-zA-Z0-9_]+)\r?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
-        static readonly Regex ReadyPattern = new Regex(Header + @"ready version=0\.3\.0\r?$",
+        static readonly Regex ReadyPattern = new Regex(Header + @"ready version=0\.3\.(?:0|2|3)\r?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        static readonly Regex ChargePattern = new Regex(Header +
+            @"charge=(100|[0-9]{1,2}) weapon=(mp_weapon_defender|mp_titanweapon_sniper)\r?$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        public static Event ParseCharge(string line)
+        {
+            Match m = ChargePattern.Match(line);
+            DateTime time;
+            if (!Timestamp(m, out time)) return null;
+            return new Event { Time = time, Name = "charge", Weapon = m.Groups[4].Value,
+                Charge = Int32.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture) };
+        }
 
         static bool Timestamp(Match m, out DateTime time)
         {
@@ -55,7 +68,8 @@ namespace TF2Provolver
         {
             // Source timestamps have only one-second precision.
             double age = (now - e.Time).TotalSeconds;
-            return age >= -1 && age <= 2;
+            // Include the whole final second: a 2.9 s coarse age may be only 1.9 s old.
+            return age >= -1 && age < 3;
         }
     }
 
@@ -120,6 +134,7 @@ namespace TF2Provolver
         public double Received;
         public double Recovery;
         public int Batch;
+        public bool FullPower;
     }
 
     public sealed class Scheduler
@@ -127,25 +142,28 @@ namespace TF2Provolver
         readonly Queue<double> intervals = new Queue<double>();
         Pulse pending;
         double lastArrival = -10, lastOutput = -10, recovery = 0;
-        string kind;
+        string kind, weapon;
         public int Expired;
         public int Replaced;
         public void ClearPending() { pending = null; }
         public void Offer(Event e, int count, double now)
         {
             double dt = now - lastArrival;
-            if (kind != e.Name || count > 1) intervals.Clear();
+            if (kind != e.Name || weapon != e.Weapon || count > 1 || dt > 0.3) intervals.Clear();
             else if (dt >= 0.025 && dt <= 0.3)
             {
                 intervals.Enqueue(dt);
                 while (intervals.Count > 6) intervals.Dequeue();
             }
             kind = e.Name;
+            weapon = e.Weapon;
             lastArrival = now;
-            // Heavy group starts at full. Rifles/SMGs/Titans start with a
-            // 60 ms recovery budget because this log does not identify a gun.
+            // Heavy groups begin at 130 ms; other groups begin at 60 ms.
+            // Actual shotguns always retain the full-power recovery budget.
             double period = e.Name == "recoil_shotgun_r" ? 0.130 : 0.060;
-            if (count > 1) period = 0.050; // Timing of batched shots is unknown.
+            bool fullPower = RecoilPower.IsShotgun(e.Weapon);
+            if (fullPower) period = 0.130;
+            else if (count > 1) period = 0.050; // Timing of batched shots is unknown.
             else if (intervals.Count >= 2)
             {
                 double fastest = 1;
@@ -153,7 +171,7 @@ namespace TF2Provolver
                 period = Math.Max(0.050, Math.Min(0.130, fastest - 0.008));
             }
             if (pending != null) Replaced++;
-            pending = new Pulse { Source = e, Received = now, Recovery = period, Batch = count };
+            pending = new Pulse { Source = e, Received = now, Recovery = period, Batch = count, FullPower = fullPower };
         }
         public Pulse Take(double now)
         {
@@ -175,6 +193,55 @@ namespace TF2Provolver
         }
     }
 
+    // A charge sample is a short-lived state update, never a queue of effects.
+    // Hardware requests last 100 ms. No infinite-duration rumble is used.
+    public sealed class ChargeEnvelope
+    {
+        public const float Duration = 0.100f;
+        int desired, sent;
+        double received = -10, lastOutput = -10;
+        public int Power { get { return sent; } }
+        public void Offer(Event e, double now)
+        {
+            if (e.Charge < 0 || e.Charge > 100) return;
+            desired = e.Charge == 0 ? 0 : 32 + (223 * e.Charge / 100);
+            received = now;
+        }
+        public void Cancel() { desired = 0; }
+        public int Take(double now)
+        {
+            // Stop refreshing after a missed source update (including pause/load).
+            if (now - received > 0.180) desired = 0;
+            if (desired == 0)
+            {
+                if (sent == 0) return -1;
+                sent = 0;
+                lastOutput = now;
+                return 0;
+            }
+            // Up to 20 updates/second, including a refresh at full held charge.
+            if (now - lastOutput < 0.050) return -1;
+            lastOutput = now;
+            sent = desired;
+            return sent;
+        }
+    }
+
+    public static class RecoilPower
+    {
+        // The provider's legacy "shotgun" group also includes snipers and launchers.
+        // Only actual shotguns bypass adaptive SDK power.
+        public static bool IsShotgun(string weapon)
+        {
+            return weapon == "mp_weapon_shotgun" || weapon == "mp_weapon_mastiff"
+                || weapon == "mp_weapon_shotgun_pistol" || weapon == "mp_weapon_shotgun_doublebarrel";
+        }
+        public static byte Select(bool fullPower, double recovery, Func<float, byte> adaptive)
+        {
+            return fullPower ? (byte)255 : adaptive((float)recovery);
+        }
+    }
+
     public sealed class Driver
     {
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -184,11 +251,13 @@ namespace TF2Provolver
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void InitFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void KickFn(byte power, int channel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate byte TempoFn(float seconds);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void RumbleFn(byte power, float seconds, int channel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void ActiveFn([MarshalAs(UnmanagedType.I1)] bool enabled);
         readonly IntPtr module;
         readonly InitFn init;
         readonly KickFn kick;
         readonly TempoFn tempo;
+        readonly RumbleFn rumble;
         readonly ActiveFn active;
         public Driver(string dll)
         {
@@ -197,6 +266,7 @@ namespace TF2Provolver
             init = (InitFn)Bind("InitPistol", typeof(InitFn));
             kick = (KickFn)Bind("KickChannel", typeof(KickFn));
             tempo = (TempoFn)Bind("TempoToKickPower", typeof(TempoFn));
+            rumble = (RumbleFn)Bind("RumbleChannel", typeof(RumbleFn));
             active = (ActiveFn)Bind("SetActive", typeof(ActiveFn));
             init(); // First paired ProTube device is assigned Pistol1 (channel 4).
         }
@@ -206,14 +276,18 @@ namespace TF2Provolver
             if (p == IntPtr.Zero) throw new Exception("ProTube DLL export missing: " + name);
             return Marshal.GetDelegateForFunctionPointer(p, type);
         }
-        public byte Kick(double recoverySeconds)
+        public byte Kick(double recoverySeconds, bool fullPower)
         {
-            // Full power is permitted; the SDK caps it for the chosen recovery.
-            byte power = tempo((float)recoverySeconds);
+            // Explicit 255/255 for shotguns; retain SDK adaptation for other weapons.
+            byte power = RecoilPower.Select(fullPower, recoverySeconds, delegate(float seconds) { return tempo(seconds); });
             if (power > 0) kick(power, 4);
             return power;
         }
-        public void Stop() { active(false); }
+        public void Rumble(byte power) { rumble(power, ChargeEnvelope.Duration, 4); }
+        public void Stop()
+        {
+            try { rumble(0, 0.010f, 4); } finally { active(false); }
+        }
         // Do not FreeLibrary: the SDK owns background threads until process exit.
     }
 
@@ -262,10 +336,10 @@ namespace TF2Provolver
                 try { acquired = mutex.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
                 if (!acquired) throw new Exception("Another bridge/test window is already running. Close it first.");
                 string mode = args.Length == 0 ? "--monitor" : args[0];
-                if (mode != "--test" && mode != "--bridge" && mode != "--monitor") throw new Exception("Unknown mode.");
+                if (mode != "--test" && mode != "--bridge" && mode != "--monitor" && mode != "--charge-test") throw new Exception("Unknown mode.");
                 audit = new StreamWriter(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bridge-session.txt"), false);
                 audit.AutoFlush = false;
-                Say("Titanfall 2 VR ProVolver Bridge 0.3.0 | Pistol1/channel 4 | full-power slow shots, adaptive rapid fire");
+                Say("Titanfall 2 VR ProVolver Bridge 0.3.3 | Pistol1/channel 4 | full-power slow shots, adaptive rapid fire");
                 Say("Experimental log bridge: timing and physical recoil need testing on your PC.");
                 Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; stopping = true; };
                 if (mode != "--monitor")
@@ -274,7 +348,7 @@ namespace TF2Provolver
                     if (!File.Exists(dll)) throw new Exception("ProTube DLL missing. Run GET_PROTUBE_DLL.cmd once, then restart START.cmd. See README.md for manual setup.");
                     driver = new Driver(dll);
                     Say("ProTube connection started. Turn on your paired ProVolver; close ProTube Companion first.");
-                    Say("Install the bundled Titanfall2VR.ProVolver game mod. bHaptics is not required.");
+                    Say("Standalone recoil mode.");
                 }
                 if (mode == "--test")
                 {
@@ -283,8 +357,26 @@ namespace TF2Provolver
                     string answer = Console.ReadLine();
                     if (!stopping && answer != null && answer.Trim().Length == 0)
                     {
-                        Say("Requested one FULL-POWER kick at " + driver.Kick(0.130) + "/255. This does not confirm hardware receipt.");
+                        Say("Requested one FULL-POWER kick at " + driver.Kick(0.130, true) + "/255. This does not confirm hardware receipt.");
                         Thread.Sleep(1000); // Give the SDK's async Bluetooth sender time before process exit.
+                    }
+                    return 0;
+                }
+                if (mode == "--charge-test")
+                {
+                    Say("Wait for connection, then Enter for a TWO-SECOND rising rumble (no recoil kick). Q then Enter cancels.");
+                    string answer = Console.ReadLine();
+                    if (!stopping && answer != null && answer.Trim().Length == 0)
+                    {
+                        Stopwatch testClock = Stopwatch.StartNew();
+                        while (!stopping && testClock.Elapsed.TotalSeconds < 2.0)
+                        {
+                            byte power = (byte)Math.Min(255, 32 + (223 * testClock.Elapsed.TotalSeconds / 1.9));
+                            driver.Rumble(power);
+                            Thread.Sleep(50);
+                        }
+                        driver.Rumble(0);
+                        Thread.Sleep(150);
                     }
                     return 0;
                 }
@@ -304,11 +396,13 @@ namespace TF2Provolver
                 catch (UnauthorizedAccessException) { Say("Could not save log folder; pass it again next run."); }
                 Say("Watching " + directory);
                 Say(mode == "--monitor" ? "MONITOR ONLY: no ProTube DLL loaded, no kicks." : "LIVE BRIDGE: standalone pilot and Titan recoil enabled on your single ProVolver.");
-                Say("Existing log entries are skipped. Fire a few separated shots in the campaign. Ctrl+C stops.");
+                Say("Existing log entries are skipped. Launch VR normally if needed, then fire in the campaign. Ctrl+C stops.");
                 timerSet = timeBeginPeriod(1) == 0;
                 Stopwatch clock = Stopwatch.StartNew();
                 double lastScan = -2, lastReport = 0, lastLoop = 0;
                 Scheduler scheduler = new Scheduler();
+                ChargeEnvelope charge = new ChargeEnvelope();
+                int chargeSamples = 0, lastLoggedCharge = 0;
                 string current = null;
                 int seen = 0, sent = 0, discarded = 0, batched = 0, stalls = 0;
                 bool providerSeen = false;
@@ -319,6 +413,7 @@ namespace TF2Provolver
                     {
                         tail.Reset(); // A delayed reader must not catch up with queued shots.
                         scheduler.ClearPending();
+                        charge.Cancel();
                         stalls++;
                         Say("Reader paused over 250 ms; skipped pending events.");
                     }
@@ -332,6 +427,7 @@ namespace TF2Provolver
                             if (tail != null) tail.Dispose();
                             tail = new Tail(latest);
                             scheduler.ClearPending();
+                            charge.Cancel();
                             current = latest;
                             providerSeen = false;
                             Say("Attached at end of " + Path.GetFileName(current));
@@ -347,12 +443,30 @@ namespace TF2Provolver
                             if (!providerSeen && Events.Ready(line, wallNow))
                             {
                                 providerSeen = true;
-                                Say("Standalone game provider detected (no bHaptics dependency).");
+                                Say("Standalone game provider detected.");
+                            }
+                            Event chargeEvent = Events.ParseCharge(line);
+                            if (chargeEvent != null)
+                            {
+                                if (Events.Fresh(chargeEvent, wallNow))
+                                {
+                                    charge.Offer(chargeEvent, clock.Elapsed.TotalSeconds);
+                                    chargeSamples++;
+                                }
+                                continue;
                             }
                             Event e = Events.Parse(line);
                             if (e == null) continue;
                             seen++;
-                            if (!Events.Fresh(e, wallNow)) { discarded++; continue; }
+                            if (!Events.Fresh(e, wallNow))
+                            {
+                                discarded++;
+                                audit.WriteLine(wallNow.ToString("yyyy-MM-dd HH:mm:ss.fff") +
+                                    " STALE SHOT | weapon=" + e.Weapon + " | ageSeconds=" +
+                                    (wallNow - e.Time).TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
+                                continue;
+                            }
+                            charge.Cancel(); // A shot ends charging; never invent a shot from charge release.
                             selected = e;
                             count++;
                         }
@@ -364,11 +478,22 @@ namespace TF2Provolver
                             scheduler.Offer(selected, count, clock.Elapsed.TotalSeconds);
                         }
                     }
+                    int rumblePower = charge.Take(clock.Elapsed.TotalSeconds);
+                    if (rumblePower >= 0)
+                    {
+                        if (driver != null) driver.Rumble((byte)rumblePower);
+                        if (rumblePower != lastLoggedCharge)
+                        {
+                            audit.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") +
+                                (driver == null ? " CHARGE MONITOR " : " RUMBLE REQUEST ") + rumblePower + "/255");
+                            lastLoggedCharge = rumblePower;
+                        }
+                    }
                     Pulse pulse = scheduler.Take(clock.Elapsed.TotalSeconds);
                     if (pulse != null)
                     {
                         double sdkStart = clock.Elapsed.TotalSeconds;
-                        byte power = driver == null ? (byte)0 : driver.Kick(pulse.Recovery);
+                        byte power = driver == null ? (byte)0 : driver.Kick(pulse.Recovery, pulse.FullPower);
                         double sdkMs = (clock.Elapsed.TotalSeconds - sdkStart) * 1000;
                         sent++;
                         audit.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") +
@@ -383,7 +508,8 @@ namespace TF2Provolver
                         lastReport = now;
                         Say("Shots=" + seen + " outputs=" + sent + " grouped=" + batched +
                             " stale=" + discarded + " expired=" + scheduler.Expired +
-                            " replaced=" + scheduler.Replaced + " readerPauses=" + stalls);
+                            " replaced=" + scheduler.Replaced + " readerPauses=" + stalls +
+                            " chargeSamples=" + chargeSamples + " chargePower=" + charge.Power);
                         audit.Flush();
                     }
                     Thread.Sleep(2);
@@ -433,7 +559,34 @@ namespace TF2Provolver
             Check(Events.Fresh(e, e.Time.AddMilliseconds(1300)), "second-resolution timestamp");
             Check(!Events.Fresh(e, e.Time.AddSeconds(3)), "drop stale shots");
             Check(!Events.Fresh(e, e.Time.AddSeconds(-3)), "drop future timestamp");
-            Event rifle = Events.Parse(sample.Replace("shot=shotgun", "shot=rifle"));
+            Event rifle = Events.Parse(sample.Replace("shot=shotgun", "shot=rifle").Replace("mp_weapon_shotgun", "mp_weapon_r97"));
+            string chargeLine = "[2026-10-12] [17:02:48] [SCRIPT CL] [info] [PVBRIDGE/1] charge=50 weapon=mp_titanweapon_sniper";
+            Event half = Events.ParseCharge(chargeLine);
+            Check(half != null && half.Charge == 50, "parse Plasma Railgun charge");
+            Check(Events.ParseCharge(chargeLine.Replace("mp_titanweapon_sniper", "mp_weapon_defender")) != null, "parse Charge Rifle charge");
+            Check(Events.Parse(chargeLine) == null, "charge update never becomes a recoil event");
+            Check(Events.ParseCharge(chargeLine.Replace("charge=50", "charge=101")) == null, "reject excessive charge value");
+            Check(Events.ParseCharge(chargeLine.Replace("charge=50", "charge=-1")) == null, "reject negative charge value");
+            Check(Events.ParseCharge(chargeLine.Replace("mp_titanweapon_sniper", "mp_weapon_car")) == null, "ignore unrelated charge weapons");
+            Check(Events.ParseCharge(chargeLine.Replace("SCRIPT CL", "SCRIPT SV")) == null, "ignore server charge messages");
+            Check(Events.Ready(ready.Replace("0.3.0", "0.3.3"), e.Time), "recognize updated provider heartbeat");
+            ChargeEnvelope envelope = new ChargeEnvelope();
+            envelope.Offer(half, 0);
+            Check(envelope.Take(0) == 143, "half charge gives intermediate rumble");
+            Check(envelope.Take(0.020) == -1, "rumble refresh rate is limited");
+            Event full = Events.ParseCharge(chargeLine.Replace("charge=50", "charge=100"));
+            envelope.Offer(full, 0.050);
+            Check(envelope.Take(0.051) == 255, "full charge requests maximum rumble");
+            Check(envelope.Take(0.110) == 255, "held charge refreshes a finite pulse");
+            Check(envelope.Take(0.240) == 0 && envelope.Take(0.241) == -1, "missing source updates stop rumble once");
+            envelope.Offer(full, 1); envelope.Take(1);
+            envelope.Offer(Events.ParseCharge(chargeLine.Replace("charge=50", "charge=0")), 1.010);
+            Check(envelope.Take(1.010) == 0, "charge release stops immediately despite output rate limit");
+            envelope.Offer(full, 2); envelope.Take(2); envelope.Cancel();
+            Check(envelope.Take(2.001) == 0, "shot, weapon switch or log reset cancels rumble");
+            envelope.Offer(half, 3); envelope.Offer(full, 3); envelope.Cancel();
+            Check(envelope.Take(3) == -1, "batched ramp followed by cancel is not replayed");
+            Check(ChargeEnvelope.Duration > 0 && ChargeEnvelope.Duration <= 0.1f, "all rumble pulses are finite and short");
             Scheduler rapid = new Scheduler();
             int rapidSent = 0;
             // 1000 RPM, with five milliseconds of alternating arrival jitter.
@@ -462,6 +615,57 @@ namespace TF2Provolver
             slow.Offer(rifle, 1, 0.2); slow.Take(0.2);
             slow.Offer(rifle, 1, 0.4);
             Check(Math.Abs(slow.Take(0.4).Recovery - 0.130) < 0.000001, "slow rifle shots reach full-power recovery");
+            Check(Events.Fresh(e, e.Time.AddMilliseconds(2999)), "freshness includes coarse timestamp final second");
+            Check(Events.Ready(ready.Replace("0.3.0", "0.3.3"), e.Time), "recognize fixed provider heartbeat");
+            int adaptiveCalls = 0;
+            Func<float, byte> adaptive = delegate(float seconds) { adaptiveCalls++; return 123; };
+            Check(RecoilPower.Select(true, 0.050, adaptive) == 255 && adaptiveCalls == 0,
+                "shotgun bypasses adaptive SDK and requests 255/255");
+            Check(RecoilPower.Select(false, 0.060, adaptive) == 123 && adaptiveCalls == 1,
+                "other weapons retain adaptive SDK power");
+            foreach (string shotgun in new string[] { "mp_weapon_shotgun", "mp_weapon_mastiff",
+                "mp_weapon_shotgun_pistol", "mp_weapon_shotgun_doublebarrel" })
+            {
+                Event shot = new Event { Name = e.Name, Weapon = shotgun, Time = e.Time };
+                Scheduler shotgunSchedule = new Scheduler();
+                shotgunSchedule.Offer(shot, 1, 0);
+                Pulse first = shotgunSchedule.Take(0);
+                Check(first != null && first.FullPower && first.Recovery == 0.130,
+                    "first shotgun is full power: " + shotgun);
+                shotgunSchedule.Offer(shot, 4, 0.2);
+                Pulse batch = shotgunSchedule.Take(0.2);
+                Check(batch != null && batch.FullPower && batch.Recovery == 0.130,
+                    "batched shotgun stays full power: " + shotgun);
+                shotgunSchedule.Offer(shot, 1, 0.4); shotgunSchedule.Take(0.4);
+                shotgunSchedule.Offer(shot, 1, 0.6);
+                Check(shotgunSchedule.Take(0.6).FullPower,
+                    "cadence cannot reduce shotgun power: " + shotgun);
+            }
+            Check(!RecoilPower.IsShotgun("mp_weapon_defender") && !RecoilPower.IsShotgun("mp_weapon_epg")
+                && !RecoilPower.IsShotgun("mp_weapon_sniper") && !RecoilPower.IsShotgun("mp_titanweapon_sniper"),
+                "heavy-group charge and plasma weapons are not mistaken for shotguns");
+            Scheduler cadence = new Scheduler();
+            cadence.Offer(rifle, 1, 0); cadence.Take(0);
+            cadence.Offer(rifle, 1, 0.2); cadence.Take(0.2);
+            cadence.Offer(rifle, 1, 0.4); cadence.Take(0.4);
+            Event newRifle = new Event { Name = rifle.Name, Weapon = "mp_weapon_g2", Time = e.Time };
+            cadence.Offer(newRifle, 1, 0.6);
+            Check(cadence.Take(0.6).Recovery == 0.060, "same-group weapon switch resets cadence");
+            cadence.Offer(newRifle, 1, 0.8); cadence.Take(0.8);
+            cadence.Offer(newRifle, 1, 1.0); cadence.Take(1.0);
+            cadence.Offer(newRifle, 1, 2.0);
+            Check(cadence.Take(2.0).Recovery == 0.060, "idle first shot uses fresh cadence");
+            foreach (string chargedWeapon in new string[] { "mp_weapon_defender", "mp_titanweapon_sniper" })
+            {
+                ChargeEnvelope charged = new ChargeEnvelope();
+                charged.Offer(new Event { Charge = 100, Weapon = chargedWeapon }, 0);
+                Check(charged.Take(0) == 255, "first charge sample reaches full rumble: " + chargedWeapon);
+                charged.Cancel();
+                Scheduler discharge = new Scheduler();
+                discharge.Offer(new Event { Name = "recoil_titan", Weapon = chargedWeapon }, 1, 0.01);
+                Check(charged.Take(0.01) == 0 && discharge.Take(0.01) != null,
+                    "charge stop does not swallow first discharge: " + chargedWeapon);
+            }
             string path = Path.GetTempFileName();
             try
             {
